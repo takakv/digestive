@@ -1,16 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <endian.h>
 #include <assert.h>
+#include <stdbool.h>
+#include <limits.h>
+#include <endian.h>
 #include "sha1.h"
-
-typedef u_int32_t uint;
-typedef u_int64_t ulong;
-typedef u_int8_t byte;
-
-const int hash_bits = 160;
-const int hash_bytes = hash_bits / 8;
 
 // Initial hash values in Big Endian.
 const uint h0 = 0x67452301UL;
@@ -19,91 +14,160 @@ const uint h2 = 0x98badcfeUL;
 const uint h3 = 0x10325476UL;
 const uint h4 = 0xc3d2e1f0UL;
 
-// Context.
-typedef struct SHAstate {
-    uint state[5];
-    byte block[64];
-} SHA_CTX;
-
-void SHA_Init(SHA_CTX *ctx)
+// Create new context.
+void SHA_Init(SHA1_CTX *ctx)
 {
-    ctx->state[0] = h0;
-    ctx->state[1] = h1;
-    ctx->state[2] = h2;
-    ctx->state[3] = h3;
-    ctx->state[4] = h4;
+    ctx->digest[0] = h0;
+    ctx->digest[1] = h1;
+    ctx->digest[2] = h2;
+    ctx->digest[3] = h3;
+    ctx->digest[4] = h4;
+    ctx->buffer_len = 0;
 }
 
-void get_bytes(byte *byte_array, ulong value)
+// Get bytes in Little or Big Endian. This implementation is Little Endian specific!
+void get_bytes(byte *byte_array, uint count, ulong value, bool big_endian)
 {
-    const int count = sizeof byte_array;
+    assert(__BYTE_ORDER == __LITTLE_ENDIAN);
+    // Shift the values as many bites as needed for each byte.
+    // Ex, if we need to get 8 bytes (64 bits), the first byte gets shifted right by 56 bits,
+    // the second by 48 bits, ...
+    // If we want to get the bytes in Big Endian format, we just reverse the byte order.
     for (int i = 0; i < count; ++i)
-        byte_array[i] = (value >> ((count * 8) - (i * 8))) & 0xff;
+        byte_array[big_endian ? count - 1 - i : i] = (value >> (count * 8 - (i + 1) * 8));
 }
 
-// Rotate left.
-uint rotl(uint value, uint bits)
+// Rotate word bits left by a shift count.
+// The shift count must be smaller than the word size!
+uint rotl(uint word, uint bits)
 {
     assert (bits < 32);
-    return (value << bits) | (value >> (-bits & 31));
+    return (word << bits) | (word >> (-bits & 31));
 }
 
-// Combine 4 bytes into a 32bit word.
-uint wordify(byte b1, byte b2, byte b3, byte b4)
+// Pad the message so that the total message length is a multiple of 512 bits.
+int SHA1_pre_process(byte **output, const char *input)
 {
-    uint combined = b1 << 24 | b2 << 16 | b3 << 8 | b4;
-    return combined;
-}
-
-const char *get_sha1(const char *input)
-{
-    // Create hash context.
-    SHA_CTX ctx;
-    SHA_Init(&ctx);
-
-    /* DEBUG
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-    printf("Little endian machine\n");
-#endif
-     */
-
     ulong length_bytes = strlen(input);
+    // This limit is simply for my own programmer's convenience to avoid
+    // dealing with type boundaries, and not a limitation of SHA1.
+    if (length_bytes >= INT_MAX) return ERROR;
     ulong length_bits = length_bytes * 8;
 
-    // Use calloc to avoid having to manually set zero bits.
-    byte *message = (byte *) calloc(64, sizeof(byte));
+    // Calculate the number of 512 bit blocks needed to store the message.
+    // 64 bits are reserved for the message length.
+    int block_count = 1;
+    for (int temp = 448 - ((int) length_bytes + 1); temp < 0; temp += 512) ++block_count;
+
+    // Using calloc avoids me having to manually set zero bits.
+    byte *message = (byte *) calloc(64 * block_count, sizeof (byte));
+    if (message == NULL) return ERROR;
+
     strcpy((char *) message, input);
 
-    // Append bit "1" to message.
+    // Append bit "1" to the message.
     message[length_bytes] = 0x80;
 
     // Get length bytes
     byte bytes[8];
-    get_bytes(bytes, length_bits);
+    get_bytes(bytes, 8, length_bits, true);
 
     // Append message length to message.
     for (int i = 7; i >= 0; --i) message[64 - 1 - i] = bytes[i];
 
-    // Break message into words.
-    // Need to combine 4 bytes into one to represent 32bit word.
+    *output = message;
+    return SUCCESS;
+}
+
+void get_sha1(const char *input)
+{
+    // Create hash context.
+    SHA1_CTX ctx;
+    SHA_Init(&ctx);
+
+    byte *message = NULL;
+    if (SHA1_pre_process(&message, input) != SUCCESS)
+    {
+        // Not very descriptive, I know.
+        printf("Something went wrong.");
+        return;
+    }
+
+    for (int i = 0; i < 64; ++i) {
+        ctx.buffer[i] = message[i];
+    }
+
+    // Divide the buffer into 32 bit words.
+    // I store words in 4 bytes wide unsigned integers.
+    // 16 words of 4 bytes make up the 512 bits long bitstream.
     uint words[80];
     for (int i = 0; i < 16; ++i)
     {
-        words[i] = wordify(message[0 + (i * 4)],
-                           message[1 + (i * 4)],
-                           message[2 + (i * 4)],
-                           message[3 + (i * 4)]);
+        // As I store the bits as an array of bytes, that is,
+        // each element of the array represents 8 consecutive bits,
+        // I need to concatenate 4 bytes in order to represent a 32 bit word.
+        words[i] = message[i * 4] << 24;
+        words[i] |= message[i * 4 + 1] << 16;
+        words[i] |= message[i * 4 + 2] << 8;
+        words[i] |= message[i * 4 + 3];
     }
 
+    // Message scheduling.
     for (int i = 16; i < 80; ++i)
+        words[i] = rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
+
+    // Hash value initialisation.
+    uint a = ctx.digest[0];
+    uint b = ctx.digest[1];
+    uint c = ctx.digest[2];
+    uint d = ctx.digest[3];
+    uint e = ctx.digest[4];
+
+    uint f, k;
+
+    for (int i = 0; i < 80; ++i)
     {
-        words[i] = rotl(words[i - 6] ^ words[i - 28] ^ words[i - 32], 2);
+        if (i < 20)
+        {
+            f = d ^ (b & (c ^ d));
+            k = 0x5a827999UL;
+        }
+        else if (i < 40)
+        {
+            f = b ^ c ^ d;
+            k = 0x6ed9eba1UL;
+        }
+        else if (i < 60)
+        {
+            f = (b & c) | ((b | c) & d);
+            k = 0x8f1bbcdcUL;
+        }
+        else
+        {
+            f = b ^ c ^ d;
+            k = 0xca62c1d6;
+        }
+
+        uint temp = rotl(a, 5) + f + e + k + words[i];
+        e = d;
+        d = c;
+        c = rotl(b, 30);
+        b = a;
+        a = temp;
+    }
+    ctx.digest[0] += a;
+    ctx.digest[1] += b;
+    ctx.digest[2] += c;
+    ctx.digest[3] += d;
+    ctx.digest[4] += e;
+
+    byte hash[SHA1_HASH_SIZE];
+    for (int i = 0; i < SHA1_HASH_SIZE; ++i) {
+        hash[i] = ctx.digest[i >> 2] >> 8 * (3 - (i & 0x03));
     }
 
-    uint a = h0;
-    uint b = h1;
-    uint c = h2;
-    uint d = h3;
-    uint e = h4;
+    for (int i = 0; i < SHA1_HASH_SIZE; ++i) {
+        printf("%02x", hash[i]);
+    }
 }
 

@@ -1,8 +1,17 @@
-#ifndef HASH_PRACTICE_SHA1_H
-#define HASH_PRACTICE_SHA1_H
+#include "types.h"
 
+#ifndef SHA1_H
+#define SHA1_H
 
+#define SHA1_HASH_SIZE 20
 
-const char* get_sha1(const char* input);
+// Hold context information during hashing operations.
+typedef struct SHAstate {
+    uint digest[5];
+    byte buffer[64];
+    int buffer_len;
+} SHA1_CTX;
 
-#endif //HASH_PRACTICE_SHA1_H
+void get_sha1(const char* input);
+
+#endif

@@ -3,4 +3,4 @@ project(hash_practice C)
 
 set(CMAKE_C_STANDARD 11)
 
-add_executable(hash_practice main.c sha1.c sha1.h)
+add_executable(hash_practice main.c sha1.c sha1.h types.h)
