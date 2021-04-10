@@ -21,6 +21,8 @@ char *read_stdin()
         input = realloc(input, input_len + temp_len + 1);
         strcpy(input + input_len, buffer);
         input_len += temp_len;
+
+        if (ferror(stdin)) return NULL;
     }
     while (temp_len == CHUNK - 1 && buffer[CHUNK - 2] != '\n');
     return input;
@@ -29,6 +31,12 @@ char *read_stdin()
 int main()
 {
     char *input = read_stdin();
+
+    if (input == NULL)
+    {
+        printf("Fetching input failed.");
+        return 1;
+    }
 
     byte message_digest[SHA1_HASH_SIZE];
     if (SHA1_get_digest(message_digest, input) == ERROR)
