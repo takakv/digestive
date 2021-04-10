@@ -9,9 +9,9 @@
 typedef struct SHAstate {
     uint digest[5];
     byte buffer[64];
-    int buffer_len;
+    int block_count;
 } SHA1_CTX;
 
-void get_sha1(const char* input);
+int SHA1_get_digest(byte *message_digest, const char *input);
 
 #endif

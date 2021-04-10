@@ -22,7 +22,7 @@ void SHA_Init(SHA1_CTX *ctx)
     ctx->digest[2] = h2;
     ctx->digest[3] = h3;
     ctx->digest[4] = h4;
-    ctx->buffer_len = 0;
+    ctx->block_count = 0;
 }
 
 // Get bytes in Little or Big Endian. This implementation is Little Endian specific!
@@ -46,21 +46,26 @@ uint rotl(uint word, uint bits)
 }
 
 // Pad the message so that the total message length is a multiple of 512 bits.
-int SHA1_pre_process(byte **output, const char *input)
+int SHA1_pre_process(byte **output, const char *input, SHA1_CTX *ctx)
 {
     ulong length_bytes = strlen(input);
     // This limit is simply for my own programmer's convenience to avoid
     // dealing with type boundaries, and not a limitation of SHA1.
-    if (length_bytes >= INT_MAX) return ERROR;
+    if (length_bytes >= INT_MAX) {
+        printf("Input too big!");
+        return ERROR;
+    }
     ulong length_bits = length_bytes * 8;
 
     // Calculate the number of 512 bit blocks needed to store the message.
-    // 64 bits are reserved for the message length.
-    int block_count = 1;
-    for (int temp = 448 - ((int) length_bytes + 1); temp < 0; temp += 512) ++block_count;
+    // 64 bits are reserved for storing the message length.
+    // k represents the padding bits count + 1.
+    int k;
+    for (k = 448 - (int) length_bits; k < 0; k += 512);
+    int block_count = ((int) length_bits + k) / 512 + 1;
 
     // Using calloc avoids me having to manually set zero bits.
-    byte *message = (byte *) calloc(64 * block_count, sizeof (byte));
+    byte *message = (byte *) calloc(64 * block_count, sizeof(byte));
     if (message == NULL) return ERROR;
 
     strcpy((char *) message, input);
@@ -73,30 +78,15 @@ int SHA1_pre_process(byte **output, const char *input)
     get_bytes(bytes, 8, length_bits, true);
 
     // Append message length to message.
-    for (int i = 7; i >= 0; --i) message[64 - 1 - i] = bytes[i];
+    for (int i = 7; i >= 0; --i) message[64 * block_count - 1 - i] = bytes[i];
 
     *output = message;
+    ctx->block_count = block_count;
     return SUCCESS;
 }
 
-void get_sha1(const char *input)
+void SHA1_process(SHA1_CTX *ctx)
 {
-    // Create hash context.
-    SHA1_CTX ctx;
-    SHA_Init(&ctx);
-
-    byte *message = NULL;
-    if (SHA1_pre_process(&message, input) != SUCCESS)
-    {
-        // Not very descriptive, I know.
-        printf("Something went wrong.");
-        return;
-    }
-
-    for (int i = 0; i < 64; ++i) {
-        ctx.buffer[i] = message[i];
-    }
-
     // Divide the buffer into 32 bit words.
     // I store words in 4 bytes wide unsigned integers.
     // 16 words of 4 bytes make up the 512 bits long bitstream.
@@ -106,10 +96,10 @@ void get_sha1(const char *input)
         // As I store the bits as an array of bytes, that is,
         // each element of the array represents 8 consecutive bits,
         // I need to concatenate 4 bytes in order to represent a 32 bit word.
-        words[i] = message[i * 4] << 24;
-        words[i] |= message[i * 4 + 1] << 16;
-        words[i] |= message[i * 4 + 2] << 8;
-        words[i] |= message[i * 4 + 3];
+        words[i] = ctx->buffer[i * 4] << 24;
+        words[i] |= ctx->buffer[i * 4 + 1] << 16;
+        words[i] |= ctx->buffer[i * 4 + 2] << 8;
+        words[i] |= ctx->buffer[i * 4 + 3];
     }
 
     // Message scheduling.
@@ -117,11 +107,11 @@ void get_sha1(const char *input)
         words[i] = rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
 
     // Hash value initialisation.
-    uint a = ctx.digest[0];
-    uint b = ctx.digest[1];
-    uint c = ctx.digest[2];
-    uint d = ctx.digest[3];
-    uint e = ctx.digest[4];
+    uint a = ctx->digest[0];
+    uint b = ctx->digest[1];
+    uint c = ctx->digest[2];
+    uint d = ctx->digest[3];
+    uint e = ctx->digest[4];
 
     uint f, k;
 
@@ -155,19 +145,35 @@ void get_sha1(const char *input)
         b = a;
         a = temp;
     }
-    ctx.digest[0] += a;
-    ctx.digest[1] += b;
-    ctx.digest[2] += c;
-    ctx.digest[3] += d;
-    ctx.digest[4] += e;
+    ctx->digest[0] += a;
+    ctx->digest[1] += b;
+    ctx->digest[2] += c;
+    ctx->digest[3] += d;
+    ctx->digest[4] += e;
+}
 
-    byte hash[SHA1_HASH_SIZE];
-    for (int i = 0; i < SHA1_HASH_SIZE; ++i) {
-        hash[i] = ctx.digest[i >> 2] >> 8 * (3 - (i & 0x03));
+int SHA1_get_digest(byte *message_digest, const char *input)
+{
+    // Create hash context.
+    SHA1_CTX ctx;
+    SHA_Init(&ctx);
+
+    // Pad the message.
+    byte *message = NULL;
+    if (SHA1_pre_process(&message, input, &ctx) != SUCCESS) return ERROR;
+
+    // Split message into 512 bit blocks and process each of them.
+    for (int i = 0; i < ctx.block_count; ++i)
+    {
+        if (!memcpy(ctx.buffer, message + (i * 64), 64)) return ERROR;
+        SHA1_process(&ctx);
     }
 
-    for (int i = 0; i < SHA1_HASH_SIZE; ++i) {
-        printf("%02x", hash[i]);
-    }
+    // Assemble the hash.
+    for (int i = 0; i < SHA1_HASH_SIZE; ++i)
+        message_digest[i] = ctx.digest[i >> 2] >> 8 * (3 - (i & 0x03));
+
+    free(message);
+    return SUCCESS;
 }
 
