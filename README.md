@@ -1,6 +1,6 @@
-# Hash agorithm study
+# Hash algorithm study
 
-A couple of hashing algorithms programmed in C in order to more deeply familiarise myself with the inner workings.
+A couple of hashing algorithms I wrote in C in order to more deeply familiarise myself with the inner workings.
 
 These implementations are by no means robust, perhaps not even precise, but they do aim to be correct.
 
